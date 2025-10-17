@@ -8,11 +8,11 @@ A lightweight Unreal + Web backend practice project focused on core client–ser
 **Goal:** Get both environments talking locally.
 
 ### ✅ Tasks
-- [ ] Create GitHub repo `TinyTrials`
-- [ ] Initialize Unreal 5.x project `TinyTrialsGame`
-- [ ] Create `backend/` folder with `FastAPI` or `Express.js` template
-- [ ] Add `docker-compose.yml` (API + DB + optional Redis)
-- [ ] Define `.env` (DB URL, JWT secret, etc.)
+- [X] Create GitHub repo `TinyTrials`
+- [X] Initialize Unreal 5.4.4 project `TinyTrialsGame`
+- [X] Create `backend/` folder with `FastAPI` template
+- [X] Add `docker-compose.yml` (API + DB + optional Redis)
+- [X] Define `.env` (DB URL, JWT secret, etc.)
 - [ ] Set up DB migrations (Alembic / Prisma / Sequelize)
 - [ ] Verify `GET /health` returns OK
 
