@@ -37,6 +37,7 @@ ipch/
 # Ignore generated/intermediate artifacts:
 Unreal/Binaries/
 Unreal/DerivedDataCache/
+Unreal/Content/
 Unreal/Intermediate/
 Unreal/Saved/
 Unreal/DerivedDataCache/
