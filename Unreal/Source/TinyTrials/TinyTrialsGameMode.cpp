@@ -1,45 +1,73 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "TinyTrialsGameMode.h"
+#include "TinyTrialsGameState.h"
 #include "TinyTrialsCharacter.h"
 #include "TinyTrialsPlayerController.h"
 #include "UObject/ConstructorHelpers.h"
+#include "HttpModule.h"
 #include "Interfaces/IHttpResponse.h"
 #include "Json.h"
 #include "JsonUtilities.h"
+#include "Kismet/GameplayStatics.h"
+#include "Net/UnrealNetwork.h"
 
 ATinyTrialsGameMode::ATinyTrialsGameMode()
 {
 	// set default pawn class to our Blueprinted character
 	static ConstructorHelpers::FClassFinder<APawn> PlayerPawnClassFinder(TEXT("/Game/FirstPerson/Blueprints/BP_FirstPersonCharacter"));
 	DefaultPawnClass = PlayerPawnClassFinder.Class;
+    bUseSeamlessTravel = true;
+}
 
+void ATinyTrialsGameMode::RequestJoinSession(ATinyTrialsPlayerController* NewPlayer)
+{
+    // keep a queue for new logins so we only process one at a time
+    ProcessedControllersQueue.AddUnique(TWeakObjectPtr<ATinyTrialsPlayerController>(NewPlayer));
+    if (ProcessedControllersQueue.Num() == 1) ProcessLogin(NewPlayer);
+}
+
+void ATinyTrialsGameMode::BeginPlay()
+{
+    Super::BeginPlay();
+
+    InitGameState();
 }
 
 void ATinyTrialsGameMode::PostLogin(APlayerController* NewLogin)
 {
 	Super::PostLogin(NewLogin);
 
-    auto C = Cast<ATinyTrialsPlayerController>(NewLogin);
-    if (!C)
+    if (!NewLogin->IsA<ATinyTrialsPlayerController>())
     {
-        UE_LOG(LogTemp, Warning, TEXT("[Game Mode] New log in not expected class."));
+        UE_LOG(LogTemp, Warning, TEXT("[Game Mode] New log in not of expected class."));
         return;
     }
-    // keep a queue for new logins so we only process one at a time
-    ProcessedControllersQueue.AddUnique(C);
-    if (ProcessedControllersQueue.Num() <= 1) ProcessLogin(C);
+}
+
+void ATinyTrialsGameMode::InitGameState()
+{
+    if (!GS)
+    {
+        GS = GetGameState<ATinyTrialsGameState>();
+        if (!GS)
+        {
+            GEngine->AddOnScreenDebugMessage(-1, 5.f, FColor::Red, TEXT("[Game Mode] Game State not initialised. Problem!"));
+            return;
+        }
+        GS->OnGameReady.AddUObject(this, &ATinyTrialsGameMode::StartSession);
+    }
 }
 
 void ATinyTrialsGameMode::ProcessLogin(ATinyTrialsPlayerController* NewLogin)
 {
-    // 1) Build the payload
+    // Build the payload
     auto Json = GenerateJsonObj(NewLogin);
     FString Body;
     TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Body);
     FJsonSerializer::Serialize(Json, Writer);
 
-    // 2) Create request
+    // Create request
     auto& Http = FHttpModule::Get();
     TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Req = Http.CreateRequest();
     BuildHttpRequest(Req, Body);
@@ -54,29 +82,20 @@ void ATinyTrialsGameMode::ManageLoginQueue()
 {
     ProcessedControllersQueue.RemoveAt(0);
     if (ProcessedControllersQueue.IsEmpty()) return;
-
-    TArray<int32> StaleControllers;
-    ATinyTrialsPlayerController* NextController = nullptr;
-    for (int32 i = 0; i < ProcessedControllersQueue.Num(); ++i)
+    // remove any stale ptrs
+    ProcessedControllersQueue.RemoveAllSwap([](const TWeakObjectPtr<ATinyTrialsPlayerController>& P)
     {
-        if (!ProcessedControllersQueue[i].IsValid())
-        {
-            StaleControllers.Add(i);
-        }
-        else
-        {
-            NextController = ProcessedControllersQueue[i].Get();
-            break;
-        }
-    }
-    for (const auto& ContIdx : StaleControllers) ProcessedControllersQueue.RemoveAt(ContIdx);
-    if (NextController) ProcessLogin(NextController);
+        return !P.IsValid();
+    });
+
+    if (!ProcessedControllersQueue.IsEmpty()) ProcessLogin(ProcessedControllersQueue[0].Get());
 }
 
-TSharedRef<FJsonObject> ATinyTrialsGameMode::GenerateJsonObj(APlayerController* Controller) const
+TSharedRef<FJsonObject> ATinyTrialsGameMode::GenerateJsonObj(ATinyTrialsPlayerController* Controller) const
 {
-    const FString DeviceId = TEXT("") /*GetOrMakeStableDeviceIdFor(Controller)*/;
-    const FString DisplayName = TEXT("") /*GetDisplayNameFor(Controller)*/;
+    int32 LocalIdx = Controller ? Controller->NetPlayerIndex : 0;
+    const FString DeviceId = DeviceIdHelper::GetOrMakeStableDeviceId(LocalIdx);
+    const FString DisplayName = Controller->GetPlayerDisplayName();
 
     TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
     Json->SetStringField(TEXT("device_id"), DeviceId);
@@ -89,7 +108,7 @@ void ATinyTrialsGameMode::BuildHttpRequest(TSharedRef<class IHttpRequest, ESPMod
     // in reality, we'd make a getter/generator but for this project we just set some default base values
     FHttpProfile Profile;
 
-    Req->SetURL(Profile.BaseUrl);
+    Req->SetURL(Profile.Url());
     Req->SetVerb(Profile.Verb);
     Req->SetHeader(TEXT("Content-Type"), Profile.ContentType);
     for (const auto& Kvp : Profile.Headers)
@@ -102,28 +121,34 @@ void ATinyTrialsGameMode::BuildHttpRequest(TSharedRef<class IHttpRequest, ESPMod
 
 void ATinyTrialsGameMode::OnRequestComplete(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bSucceeded)
 {
-    if (!ProcessedControllersQueue.IsEmpty()) return;
+    if (ProcessedControllersQueue.IsEmpty()) return;
 
     if (!ProcessedControllersQueue[0].IsValid())
     {
-        ManageLoginQueue();
-        return;
+        //HandleStaleLogin();
+        bSucceeded = false;
     }
-    auto ProcessingController = ProcessedControllersQueue[0].Get();
-
     if (!bSucceeded || !Response.IsValid())
     {
+        bSucceeded = false;
         //HandleAuthFailure(ControllerBeingProcessed.Get(), TEXT("Network/No response"));
-        return;
     }
 
     if (Response->GetResponseCode() != 200)
     {
+        bSucceeded = false;
         //HandleAuthFailure(ControllerBeingProcessed.Get(), FString::Printf(TEXT("HTTP %d"), Response->GetResponseCode()));
+    }
+
+    if (!bSucceeded)
+    {
+        ManageLoginQueue();
         return;
     }
 
-    // 3) Parse JSON: { "playerId": "...", "jwt": "..." }
+    auto ProcessingController = ProcessedControllersQueue[0].Get();
+
+    // Parse JSON
     TSharedPtr<FJsonObject> JsonResp;
     const auto Payload = Response->GetContentAsString();
     TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Payload);
@@ -143,11 +168,23 @@ void ATinyTrialsGameMode::OnRequestComplete(FHttpRequestPtr Request, FHttpRespon
 
 void ATinyTrialsGameMode::PutPlayerInPendingAuthState(ATinyTrialsPlayerController* PendingController)
 {
-    // set bool gate to prevent initialisation
+    PendingController->OnStartJoin();
 }
 
 void ATinyTrialsGameMode::InitializeAuthorizedPlayer(ATinyTrialsPlayerController* AuthController, const FString& ID, const FString& Token)
 {
-    // set bool gate to allow initialisation
+    AuthController->OnPlayerAuthorised(ID, Token);
+    GS->ServerAddOrUpdatePlayer(AuthController->GetPlayerProfile());
+}
+
+void ATinyTrialsGameMode::StartSession()
+{
+    if (!bSessionStarted)
+    {
+        const int32 LevelSeed = FMath::Rand();
+        const FString TravelURL = FString::Printf(TEXT("/Game/FirstPerson/Maps/FirstPersonMap.FirstPersonMap?seed=%d"), LevelSeed);
+        GetWorld()->ServerTravel(TravelURL);
+        bSessionStarted = true;
+    }
 }
 

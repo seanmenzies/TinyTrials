@@ -54,6 +54,21 @@ struct FHttpProfile
         return BaseUrl + TEXT("/") + Endpoint;
     }
 };
+// @TODO this would definitely be better in its own class
+namespace DeviceIdHelper
+{
+    inline FString GetOrMakeStableDeviceId(int32 Suffix = -1)
+    {
+        // Load or create a simple Saved GUID; keep it tiny for demo
+        static FString Cached;
+        if (!Cached.IsEmpty())
+            return Suffix >= 0 ? (Cached + FString::Printf(TEXT("-%d"), Suffix)) : Cached;
+
+        // Try config or saved slot; for brevity just generate once per process:
+        Cached = FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphens);
+        return Suffix >= 0 ? (Cached + FString::Printf(TEXT("-%d"), Suffix)) : Cached;
+    }
+}
 
 UCLASS(minimalapi)
 class ATinyTrialsGameMode : public AGameModeBase
@@ -62,16 +77,23 @@ class ATinyTrialsGameMode : public AGameModeBase
 
 public:
 	ATinyTrialsGameMode();
+    void RequestJoinSession(class ATinyTrialsPlayerController* NewPlayer);
 
 protected:
+    virtual void BeginPlay() override;
 	virtual void PostLogin(APlayerController* NewLogin) override;
 
 private:
+    class ATinyTrialsGameState* GS;
+    void InitGameState();
+    void StartSession();
+    bool bSessionStarted = false;
+
 	void ProcessLogin(ATinyTrialsPlayerController* NewLogin);
 	void ManageLoginQueue();
 	UPROPERTY()
 	TArray<TWeakObjectPtr<ATinyTrialsPlayerController>> ProcessedControllersQueue;
-	TSharedRef<FJsonObject> GenerateJsonObj(APlayerController* Controller) const;
+	TSharedRef<FJsonObject> GenerateJsonObj(ATinyTrialsPlayerController* Controller) const;
 	void BuildHttpRequest(TSharedRef<class IHttpRequest, ESPMode::ThreadSafe> Req, const FString& Body);
 	void OnRequestComplete(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bSucceeded);
 

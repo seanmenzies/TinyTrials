@@ -15,12 +15,22 @@ def get_db():
     finally:
         db.close()
 
-@router.post("/register", response_model=AuthResp)
-def register(req: RegisterReq, db: Session = Depends(get_db)):
-    # naive: create a player every time for demo; in practice upsert by device_id
-    player = models.Player(display_name=req.display_name or f"Player-{str(uuid4())[:8]}")
-    db.add(player)
-    db.commit()
-    db.refresh(player)
+@router.post("/register-or-login", response_model=AuthResp)
+def register_or_login(req: RegisterReq, db: Session = Depends(get_db)):
+    # sanitize, @TODO make universal, importable config rules across whole pipeline
+    name = (req.display_name or "").strip()[:32] or f"Player-{str(uuid4())[:8]}"
+
+    player = db.query(models.Player).filter(models.Player.device_id == req.device_id).one_or_none()
+    if not player:
+        player = models.Player(device_id=req.device_id, display_name=name)
+        db.add(player)
+        db.commit()
+        db.refresh(player)
+    else:
+        # update display name if user changed it
+        if name and name != player.display_name:
+            player.display_name = name
+            db.commit()
+
     token = issue_jwt(str(player.id))
     return {"playerId": str(player.id), "jwt": token}
