@@ -16,14 +16,17 @@ services:
       - pgdata:/var/lib/postgresql/data
 
   api:
-    build: .
+    build: 
+      context: ./backend
     depends_on:
       db:
         condition: service_healthy
     env_file: .env
+    working_dir: /app
     environment:
       # Ensure the app connects to the containerized DB
-      DATABASE_URL: postgresql://postgres:postgres@db:5432/tinytrials
+      DATABASE_URL: ${DATABASE_URL}
+      PYTHONPATH: /app
     ports:
       - "8000:8000"
     volumes:
@@ -36,7 +39,7 @@ services:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://postgres:postgres@db:5432/tinytrials
+      DATABASE_URL: ${DATABASE_URL}
       APP_ENV: test
     # Run pytest inside the same image
     command: pytest -q
@@ -53,7 +56,7 @@ services:
         condition: service_started
     environment:
       TT_BASE_URL: http://api:8000
-      TT_DB_URL: postgresql://postgres:postgres@db:5432/tinytrials
+      TT_DB_URL: ${DATABASE_URL}
     # Wait for API to respond, then run the smoketest module
     command: >
       sh -c "

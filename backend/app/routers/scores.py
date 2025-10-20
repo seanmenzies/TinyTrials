@@ -29,7 +29,7 @@ def require_player_id(authorization: str | None) -> str:
 @router.post("", status_code=201)
 def submit_score(body: ScoreSubmit, db: Session = Depends(get_db), authorization: str | None = None):
     player_id = require_player_id(authorization)
-    # TODO: verify checksum server-side based on shared secret and inputs
+    # @TODO: verify checksum server-side based on shared secret and inputs
     score = models.Score(player_id=player_id, day=body.day, score=body.score, checksum=body.checksum)
     db.add(score)
     db.commit()

@@ -1,4 +1,8 @@
-FROM python:3.12-slim
+FROM python:3.14
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app
 
 WORKDIR /app
 # OS deps (psycopg2 needs these)
@@ -9,8 +13,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Dev/test extras
-COPY requirements-dev.txt .
-RUN pip install --no-cache-dir -r requirements-dev.txt
+#COPY requirements-dev.txt .
+#RUN pip install --no-cache-dir -r requirements-dev.txt
 
 COPY . .
 
