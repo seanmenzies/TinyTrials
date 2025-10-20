@@ -1,13 +1,4 @@
 services:
-  api:
-    build: .
-    ports:
-      - "8000:8000"
-    env_file: .env
-    depends_on:
-      - db
-    volumes:
-      - ./app:/app/app:rw
   db:
     image: postgres:16-alpine
     environment:
@@ -16,7 +7,62 @@ services:
       POSTGRES_DB: tinytrials
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "tinytrials"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
     volumes:
       - pgdata:/var/lib/postgresql/data
+
+  api:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      # Ensure the app connects to the containerized DB
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/tinytrials
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app:/app/app:rw
+
+  # Unit-style tests (imports FastAPI app, doesn't need live API)
+  tests:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/tinytrials
+      APP_ENV: test
+    # Run pytest inside the same image
+    command: pytest -q
+    volumes:
+      - ./:/app
+
+  # Integration-style tests against the live API (/health, /register-or-login, /me)
+  tests-integration:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+      api:
+        condition: service_started
+    environment:
+      TT_BASE_URL: http://api:8000
+      TT_DB_URL: postgresql://postgres:postgres@db:5432/tinytrials
+    # Wait for API to respond, then run the smoketest module
+    command: >
+      sh -c "
+        for i in $(seq 1 60); do
+          curl -sf http://api:8000/health && break; sleep 1;
+        done;
+        python tools/backend_smoketest.py --base-url http://api:8000 --db-url $TT_DB_URL
+      "
+    volumes:
+      - ./:/app
 volumes:
   pgdata:

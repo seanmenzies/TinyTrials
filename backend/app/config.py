@@ -1,3 +1,4 @@
+from pydantic import Field, AliasChoices
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -5,7 +6,7 @@ class Settings(BaseSettings):
     app_host: str = "0.0.0.0"
     app_port: int = 8000
 
-    database_url: str
+    database_url: str = Field(validation_alias=AliasChoices("DATABASE_URL", "TT_DB_URL"))
 
     jwt_secret: str
     jwt_alg: str = "HS256"
